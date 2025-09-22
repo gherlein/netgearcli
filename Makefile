@@ -23,8 +23,9 @@ BUILD_FLAGS := $(LDFLAGS) -trimpath
 # Directories
 BUILD_DIR := bin
 
-# Example programs
-EXAMPLES := poe_status poe_status_simple poe_management
+# Example programs and their paths
+EXAMPLES := poe-status poe-status-simple poe-management
+CMD_DIRS := cmd/poe-status cmd/poe-status-simple cmd/poe-management
 
 # Default target
 .DEFAULT_GOAL := help
@@ -44,7 +45,7 @@ build: deps
 	@mkdir -p $(BUILD_DIR)
 	@for example in $(EXAMPLES); do \
 		echo "Building $$example..."; \
-		$(GOBUILD) $(BUILD_FLAGS) -o $(BUILD_DIR)/$$example ./$$example.go; \
+		$(GOBUILD) $(BUILD_FLAGS) -o $(BUILD_DIR)/$$example ./cmd/$$example; \
 		if [ $$? -ne 0 ]; then \
 			echo "❌ Failed to build $$example"; \
 			exit 1; \
