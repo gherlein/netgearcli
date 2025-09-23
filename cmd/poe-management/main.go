@@ -16,7 +16,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/gherlein/ntgrrc/pkg/netgear"
+	"github.com/gherlein/ntgrrc/pkg/netgearcli/pkg/netgear"
 )
 
 func main() {
@@ -118,27 +118,14 @@ func showStatus(ctx context.Context, client *netgear.Client, debug bool) {
 		fmt.Println("Fetching POE status...")
 	}
 
-	statuses, err := client.POE().GetStatus(ctx)
+	// Use the real go-netgear command directly since it outputs properly formatted data
+	_, err := client.POE().GetStatus(ctx)
 	if err != nil {
 		log.Fatalf("Failed to get POE status: %v", err)
 	}
 
-	if debug {
-		fmt.Printf("Retrieved status for %d ports\n", len(statuses))
-	}
-
-	fmt.Println("POE Port Status:")
-	fmt.Println("Port | Status            | Power  | Name")
-	fmt.Println("-----|-------------------|--------|------------------")
-
-	for _, status := range statuses {
-		fmt.Printf("%-4d | %-17s | %6.2fW | %s\n",
-			status.PortID,
-			status.Status,
-			status.PowerW,
-			status.PortName,
-		)
-	}
+	// The real POE status has already been output to stdout by the go-netgear command
+	// No need to format it again here
 }
 
 func showSettings(ctx context.Context, client *netgear.Client, debug bool) {
@@ -146,32 +133,14 @@ func showSettings(ctx context.Context, client *netgear.Client, debug bool) {
 		fmt.Println("Fetching POE settings...")
 	}
 
-	settings, err := client.POE().GetSettings(ctx)
+	// Use the real go-netgear command directly since it outputs properly formatted data
+	_, err := client.POE().GetSettings(ctx)
 	if err != nil {
 		log.Fatalf("Failed to get POE settings: %v", err)
 	}
 
-	if debug {
-		fmt.Printf("Retrieved settings for %d ports\n", len(settings))
-	}
-
-	fmt.Println("POE Port Settings:")
-	fmt.Println("Port | Enabled | Mode     | Priority | Limit")
-	fmt.Println("-----|---------|----------|----------|-------")
-
-	for _, setting := range settings {
-		enabled := "No"
-		if setting.Enabled {
-			enabled = "Yes"
-		}
-		fmt.Printf("%-4d | %-7s | %-8s | %-8s | %.1fW\n",
-			setting.PortID,
-			enabled,
-			setting.Mode,
-			setting.Priority,
-			setting.PowerLimitW,
-		)
-	}
+	// The real POE settings have already been output to stdout by the go-netgear command
+	// No need to format them again here
 }
 
 func enablePorts(ctx context.Context, client *netgear.Client, portArgs []string, debug bool) {

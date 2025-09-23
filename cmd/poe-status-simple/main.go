@@ -15,7 +15,7 @@ import (
 	"log"
 	"os"
 
-	"github.com/gherlein/ntgrrc/pkg/netgear"
+	"github.com/gherlein/ntgrrc/pkg/netgearcli/pkg/netgear"
 )
 
 func main() {
