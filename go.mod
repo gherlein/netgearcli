@@ -1,4 +1,4 @@
-module github.com/gherlein/netgearcli
+module netgearcli
 
 go 1.23.0
 

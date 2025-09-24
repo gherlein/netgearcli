@@ -8,7 +8,6 @@
 package main
 
 import (
-	"context"
 	"flag"
 	"fmt"
 	"log"
@@ -16,7 +15,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/gherlein/ntgrrc/pkg/netgearcli/pkg/netgear"
+	"github.com/gherlein/go-netgear"
 )
 
 func main() {
@@ -35,37 +34,34 @@ func main() {
 	switchAddress := args[0]
 	command := args[1]
 
-	// Create client with file-based token manager for persistence and optional debug
-	tokenManager := netgear.NewFileTokenManager("")
-	var client *netgear.Client
-	var err error
-
-	if debug {
-		client, err = netgear.NewClient(
-			switchAddress,
-			netgear.WithTokenManager(tokenManager),
-			netgear.WithVerbose(true),
-		)
-	} else {
-		client, err = netgear.NewClient(
-			switchAddress,
-			netgear.WithTokenManager(tokenManager),
-		)
-	}
-	if err != nil {
-		log.Fatalf("Failed to create client: %v", err)
-	}
-
-	// Auto-authenticate (will use cached token if available, or environment variables)
-	ctx := context.Background()
 	if debug {
 		fmt.Printf("Debug mode enabled\n")
 		fmt.Printf("Switch: %s, Command: %s\n", switchAddress, command)
 	}
 
-	if !client.IsAuthenticated() {
-		err = client.LoginAuto(ctx)
-		if err != nil {
+	// Set up global options for all commands
+	globalOpts := &go_netgear.GlobalOptions{
+		Verbose:      debug,
+		OutputFormat: go_netgear.JsonFormat,
+	}
+
+	// Try to login first - the command will use cached token if available
+	// or check environment variables for password
+	loginCmd := &go_netgear.LoginCommand{
+		Address: switchAddress,
+		// Password will be empty - command will check token cache and env vars
+	}
+
+	err := loginCmd.Run(globalOpts)
+	if err != nil {
+		// If login fails, it might be because we're already logged in (have a valid token)
+		// or need to provide credentials. The subsequent commands will fail if not authenticated
+		if debug {
+			fmt.Printf("Login attempt result: %v\n", err)
+		}
+
+		// Check if the error is about authentication
+		if strings.Contains(err.Error(), "no session") || strings.Contains(err.Error(), "login") {
 			log.Fatalf("Authentication failed: %v\nEnsure environment variables are set:\n  NETGEAR_SWITCHES=\"host=password;...\"\n  OR NETGEAR_PASSWORD_<HOST>=password", err)
 		}
 	}
@@ -73,15 +69,15 @@ func main() {
 	// Execute command
 	switch command {
 	case "status":
-		showStatus(ctx, client, debug)
+		showStatus(globalOpts, switchAddress)
 	case "settings":
-		showSettings(ctx, client, debug)
+		showSettings(globalOpts, switchAddress)
 	case "enable":
-		enablePorts(ctx, client, args[2:], debug)
+		enablePorts(globalOpts, switchAddress, args[2:])
 	case "disable":
-		disablePorts(ctx, client, args[2:], debug)
+		disablePorts(globalOpts, switchAddress, args[2:])
 	case "cycle":
-		cyclePorts(ctx, client, args[2:], debug)
+		cyclePorts(globalOpts, switchAddress, args[2:])
 	default:
 		fmt.Fprintf(os.Stderr, "Unknown command: %s\n", command)
 		printUsage()
@@ -113,99 +109,85 @@ Environment (choose one):
 `, os.Args[0], os.Args[0], os.Args[0], os.Args[0])
 }
 
-func showStatus(ctx context.Context, client *netgear.Client, debug bool) {
-	if debug {
-		fmt.Println("Fetching POE status...")
+func showStatus(globalOpts *go_netgear.GlobalOptions, switchAddress string) {
+	cmd := &go_netgear.PoeStatusCommand{
+		Address: switchAddress,
 	}
 
-	// Use the real go-netgear command directly since it outputs properly formatted data
-	_, err := client.POE().GetStatus(ctx)
+	err := cmd.Run(globalOpts)
 	if err != nil {
 		log.Fatalf("Failed to get POE status: %v", err)
 	}
-
-	// The real POE status has already been output to stdout by the go-netgear command
-	// No need to format it again here
 }
 
-func showSettings(ctx context.Context, client *netgear.Client, debug bool) {
-	if debug {
-		fmt.Println("Fetching POE settings...")
+func showSettings(globalOpts *go_netgear.GlobalOptions, switchAddress string) {
+	cmd := &go_netgear.PoeShowSettingsCommand{
+		Address: switchAddress,
 	}
 
-	// Use the real go-netgear command directly since it outputs properly formatted data
-	_, err := client.POE().GetSettings(ctx)
+	err := cmd.Run(globalOpts)
 	if err != nil {
 		log.Fatalf("Failed to get POE settings: %v", err)
 	}
-
-	// The real POE settings have already been output to stdout by the go-netgear command
-	// No need to format them again here
 }
 
-func enablePorts(ctx context.Context, client *netgear.Client, portArgs []string, debug bool) {
+func enablePorts(globalOpts *go_netgear.GlobalOptions, switchAddress string, portArgs []string) {
 	ports := parsePorts(portArgs)
 	if len(ports) == 0 {
 		log.Fatal("No port numbers specified")
 	}
 
-	if debug {
-		fmt.Printf("Enabling POE on %d ports: %v\n", len(ports), ports)
+	cmd := &go_netgear.PoeSetConfigCommand{
+		Address: switchAddress,
+		Ports:   ports,
+		PortPwr: "enable",
 	}
 
-	for _, port := range ports {
-		if debug {
-			fmt.Printf("Enabling port %d...\n", port)
-		}
-		err := client.POE().EnablePort(ctx, port)
-		if err != nil {
-			log.Printf("Failed to enable port %d: %v", port, err)
-		} else {
-			fmt.Printf("✓ Enabled POE on port %d\n", port)
-		}
-	}
-}
-
-func disablePorts(ctx context.Context, client *netgear.Client, portArgs []string, debug bool) {
-	ports := parsePorts(portArgs)
-	if len(ports) == 0 {
-		log.Fatal("No port numbers specified")
-	}
-
-	if debug {
-		fmt.Printf("Disabling POE on %d ports: %v\n", len(ports), ports)
-	}
-
-	for _, port := range ports {
-		if debug {
-			fmt.Printf("Disabling port %d...\n", port)
-		}
-		err := client.POE().DisablePort(ctx, port)
-		if err != nil {
-			log.Printf("Failed to disable port %d: %v", port, err)
-		} else {
-			fmt.Printf("✓ Disabled POE on port %d\n", port)
-		}
-	}
-}
-
-func cyclePorts(ctx context.Context, client *netgear.Client, portArgs []string, debug bool) {
-	ports := parsePorts(portArgs)
-	if len(ports) == 0 {
-		log.Fatal("No port numbers specified")
-	}
-
-	if debug {
-		fmt.Printf("Power cycling %d ports: %v\n", len(ports), ports)
-	}
-
-	fmt.Printf("Power cycling %d ports...\n", len(ports))
-	err := client.POE().CyclePower(ctx, ports...)
+	err := cmd.Run(globalOpts)
 	if err != nil {
-		log.Fatalf("Failed to cycle power: %v", err)
+		log.Fatalf("Failed to enable POE on ports %v: %v", ports, err)
 	}
 
-	fmt.Println("✓ Power cycle completed")
+	fmt.Printf("✓ Enabled POE on ports %v\n", ports)
+}
+
+func disablePorts(globalOpts *go_netgear.GlobalOptions, switchAddress string, portArgs []string) {
+	ports := parsePorts(portArgs)
+	if len(ports) == 0 {
+		log.Fatal("No port numbers specified")
+	}
+
+	cmd := &go_netgear.PoeSetConfigCommand{
+		Address: switchAddress,
+		Ports:   ports,
+		PortPwr: "disable",
+	}
+
+	err := cmd.Run(globalOpts)
+	if err != nil {
+		log.Fatalf("Failed to disable POE on ports %v: %v", ports, err)
+	}
+
+	fmt.Printf("✓ Disabled POE on ports %v\n", ports)
+}
+
+func cyclePorts(globalOpts *go_netgear.GlobalOptions, switchAddress string, portArgs []string) {
+	ports := parsePorts(portArgs)
+	if len(ports) == 0 {
+		log.Fatal("No port numbers specified")
+	}
+
+	cmd := &go_netgear.PoeCyclePowerCommand{
+		Address: switchAddress,
+		Ports:   ports,
+	}
+
+	err := cmd.Run(globalOpts)
+	if err != nil {
+		log.Fatalf("Failed to cycle power on ports %v: %v", ports, err)
+	}
+
+	fmt.Printf("✓ Power cycle completed on ports %v\n", ports)
 }
 
 func parsePorts(args []string) []int {
