@@ -22,6 +22,7 @@ BUILD_FLAGS := $(LDFLAGS) -trimpath
 
 # Directories
 BUILD_DIR := bin
+RELEASE_DIR := releases
 
 # Example programs and their paths
 EXAMPLES := poe-status poe-status-simple poe-management
@@ -130,10 +131,34 @@ size: build
 		ls -lh $(BUILD_DIR)/ | grep -v "^total" | awk '{print "  " $$9 ": " $$5}'; \
 	fi
 
+## release: Create release archive for current OS
+.PHONY: release
+release: build
+	@echo "Creating release archive..."
+	@mkdir -p $(RELEASE_DIR)
+	@OS=$$(uname -s | tr '[:upper:]' '[:lower:]'); \
+	TAG=$$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0"); \
+	ARCHIVE="netgearcli-$${TAG}-$${OS}.zip"; \
+	ARCHIVE_PATH="$(RELEASE_DIR)/$${ARCHIVE}"; \
+	echo "  OS: $${OS}"; \
+	echo "  Tag: $${TAG}"; \
+	echo "  Archive: $${ARCHIVE_PATH}"; \
+	cd $(BUILD_DIR) && zip -r ../$${ARCHIVE_PATH} * > /dev/null && cd ..; \
+	if [ -f "$${ARCHIVE_PATH}" ]; then \
+		echo "✅ Release archive created: $${ARCHIVE_PATH}"; \
+		ls -lh $${ARCHIVE_PATH} | awk '{print "  Size: " $$5}'; \
+	else \
+		echo "❌ Failed to create release archive"; \
+		exit 1; \
+	fi
+
 # Create necessary directories
 $(BUILD_DIR):
 	@mkdir -p $@
 
+$(RELEASE_DIR):
+	@mkdir -p $@
+
 # Build directory creation
 .PHONY: directories
-directories: $(BUILD_DIR)
+directories: $(BUILD_DIR) $(RELEASE_DIR)
