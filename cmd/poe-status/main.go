@@ -5,7 +5,7 @@
 //
 // This example demonstrates:
 // - Creating commands with the library
-// - Authenticating with password prompt
+// - Checking environment variables before prompting for password
 // - Fetching POE status
 // - Displaying the results
 
@@ -51,37 +51,34 @@ func main() {
 		OutputFormat: go_netgear.JsonFormat,
 	}
 
-	// Try to login first
-	// The LoginCommand will check if there's an existing token and use it if valid
-	// Otherwise it will try environment variables or prompt for password
+	// Check for password in environment variables first
+	password := getPasswordFromEnv(switchAddress, debug)
+
+	// Try to login - use env password if found, otherwise LoginCommand will prompt
 	loginCmd := &go_netgear.LoginCommand{
-		Address: switchAddress,
-		// Password will be empty - command will check env vars or prompt
+		Address:  switchAddress,
+		Password: password,
 	}
 
 	err := loginCmd.Run(globalOpts)
 	if err != nil {
-		// Login might fail if already logged in or if env vars are set
-		// Try to continue anyway, the POE command will fail if not authenticated
-		if debug {
-			fmt.Printf("Login attempt: %v\n", err)
-		}
-
-		// If login failed and no environment variables, prompt for password
-		if strings.Contains(err.Error(), "no password") || strings.Contains(err.Error(), "authentication") {
+		// If login failed and we didn't have an env password, try prompting
+		if password == "" && (strings.Contains(err.Error(), "password") || strings.Contains(err.Error(), "authentication")) {
 			fmt.Print("Enter admin password: ")
-			password, err := readPassword()
+			promptPassword, err := readPassword()
 			if err != nil {
 				log.Fatalf("Failed to read password: %v", err)
 			}
 			fmt.Println() // New line after password input
 
-			// Try login again with password
-			loginCmd.Password = password
+			// Try login again with prompted password
+			loginCmd.Password = promptPassword
 			err = loginCmd.Run(globalOpts)
 			if err != nil {
 				log.Fatalf("Login failed: %v", err)
 			}
+		} else {
+			log.Fatalf("Login failed: %v", err)
 		}
 	}
 
@@ -105,6 +102,42 @@ func main() {
 	if debug {
 		fmt.Println("POE status retrieval completed")
 	}
+}
+
+// getPasswordFromEnv checks for password in environment variables
+func getPasswordFromEnv(address string, debug bool) string {
+	// Check NETGEAR_PASSWORD_<hostname> format
+	envVar := "NETGEAR_PASSWORD_" + address
+	if password := os.Getenv(envVar); password != "" {
+		if debug {
+			fmt.Printf("Found password in environment variable %s\n", envVar)
+		}
+		return password
+	}
+
+	// Check NETGEAR_SWITCHES format: "host1:password1;host2:password2"
+	if switches := os.Getenv("NETGEAR_SWITCHES"); switches != "" {
+		for _, entry := range strings.Split(switches, ";") {
+			parts := strings.SplitN(entry, ":", 2)
+			if len(parts) == 2 {
+				host := strings.TrimSpace(parts[0])
+				pass := strings.TrimSpace(parts[1])
+				if host == address {
+					if debug {
+						fmt.Printf("Found password for %s in NETGEAR_SWITCHES\n", address)
+					}
+					return pass
+				}
+			}
+		}
+	}
+
+	if debug {
+		fmt.Printf("No password found in environment variables for %s\n", address)
+		fmt.Printf("Checked: %s and NETGEAR_SWITCHES\n", envVar)
+	}
+
+	return ""
 }
 
 // readPassword reads a password from stdin without echoing

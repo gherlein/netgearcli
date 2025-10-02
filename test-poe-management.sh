@@ -1,0 +1,20 @@
+#!/bin/bash
+echo "=== Debugging poe-management ==="
+echo "1. Which binary is being used:"
+type -a poe-management 2>&1 || echo "  Not found in PATH"
+echo ""
+echo "2. PATH contains:"
+echo "$PATH" | tr ':' '\n' | grep -E "(bin|workspace)" || echo "  No bin directories in PATH"
+echo ""
+echo "3. NETGEAR_SWITCHES value:"
+echo "  $NETGEAR_SWITCHES"
+echo ""
+echo "4. Binaries found:"
+find ~ /workspace -name "poe-management" -type f 2>/dev/null | while read f; do
+  echo "  $f ($(stat -c %y "$f" | cut -d' ' -f1-2))"
+done
+echo ""
+echo "5. To use the correct binary, run:"
+echo "  export PATH=\"/workspace/bin:\$PATH\""
+echo "  export NETGEAR_SWITCHES=\"tswitch16:None1234@\""
+echo "  poe-management -d tswitch16 disable 1-16"

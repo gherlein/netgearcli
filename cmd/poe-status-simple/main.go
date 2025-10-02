@@ -2,8 +2,8 @@
 // This version uses environment variables for automatic authentication.
 //
 // Usage:
-//   export NETGEAR_SWITCHES="switch1=password123"
-//   # OR export NETGEAR_PASSWORD_<HOST>=password123
+//   export NETGEAR_PASSWORD_TSWITCH1="password123"
+//   # OR export NETGEAR_SWITCHES="switch1=password123;switch2=password456"
 //   go run poe_status_simple.go [--debug|-d] <switch-hostname>
 
 package main
@@ -29,8 +29,11 @@ func main() {
 	if len(args) != 1 {
 		fmt.Fprintf(os.Stderr, "Usage: %s [--debug|-d] <switch-hostname>\n", os.Args[0])
 		fmt.Fprintf(os.Stderr, "Set environment variables:\n")
-		fmt.Fprintf(os.Stderr, "  NETGEAR_SWITCHES=\"host=password;...\"\n")
-		fmt.Fprintf(os.Stderr, "  OR NETGEAR_PASSWORD_<HOST>=password\n")
+		fmt.Fprintf(os.Stderr, "  NETGEAR_PASSWORD_<hostname>=password\n")
+		fmt.Fprintf(os.Stderr, "  OR NETGEAR_SWITCHES=\"host:password;...\"\n")
+		fmt.Fprintf(os.Stderr, "Examples:\n")
+		fmt.Fprintf(os.Stderr, "  export NETGEAR_PASSWORD_tswitch1=\"None1234@\"\n")
+		fmt.Fprintf(os.Stderr, "  export NETGEAR_SWITCHES=\"tswitch1:None1234@;tswitch2:None1234@\"\n")
 		os.Exit(1)
 	}
 
@@ -47,10 +50,13 @@ func main() {
 		OutputFormat: go_netgear.JsonFormat,
 	}
 
-	// Try to login - will use cached token, environment variables, or fail
+	// Try to get password from environment variables
+	password := getPasswordFromEnv(switchAddress, debug)
+
+	// Try to login with password from environment or empty (will use cached token)
 	loginCmd := &go_netgear.LoginCommand{
-		Address: switchAddress,
-		// Password will be empty - command will check token cache and env vars
+		Address:  switchAddress,
+		Password: password, // If empty, LoginCommand will prompt
 	}
 
 	err := loginCmd.Run(globalOpts)
@@ -61,7 +67,7 @@ func main() {
 		}
 
 		if strings.Contains(err.Error(), "no session") || strings.Contains(err.Error(), "login") || strings.Contains(err.Error(), "password") {
-			log.Fatalf("Authentication failed: %v\nEnsure environment variables are set:\n  NETGEAR_SWITCHES=\"host=password;...\"\n  OR NETGEAR_PASSWORD_<HOST>=password", err)
+			log.Fatalf("Authentication failed: %v\nEnsure environment variables are set correctly", err)
 		}
 	}
 
@@ -76,4 +82,40 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to get POE status: %v", err)
 	}
+}
+
+// getPasswordFromEnv checks for password in environment variables
+func getPasswordFromEnv(address string, debug bool) string {
+	// Check NETGEAR_PASSWORD_<hostname> format
+	envVar := "NETGEAR_PASSWORD_" + address
+	if password := os.Getenv(envVar); password != "" {
+		if debug {
+			fmt.Printf("Found password in environment variable %s\n", envVar)
+		}
+		return password
+	}
+
+	// Check NETGEAR_SWITCHES format: "host1:password1;host2:password2"
+	if switches := os.Getenv("NETGEAR_SWITCHES"); switches != "" {
+		for _, entry := range strings.Split(switches, ";") {
+			parts := strings.SplitN(entry, ":", 2)
+			if len(parts) == 2 {
+				host := strings.TrimSpace(parts[0])
+				pass := strings.TrimSpace(parts[1])
+				if host == address {
+					if debug {
+						fmt.Printf("Found password for %s in NETGEAR_SWITCHES\n", address)
+					}
+					return pass
+				}
+			}
+		}
+	}
+
+	if debug {
+		fmt.Printf("No password found in environment variables for %s\n", address)
+		fmt.Printf("Checked: %s and NETGEAR_SWITCHES\n", envVar)
+	}
+
+	return ""
 }
