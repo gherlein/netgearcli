@@ -16,6 +16,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	go_netgear "github.com/gherlein/go-netgear"
 )
@@ -27,21 +28,43 @@ var (
 	globalDebug        bool
 	globalOpts         *go_netgear.GlobalOptions
 	loginAttempted     bool
+	logFile            *os.File
+	logger             *log.Logger
 )
 
 func main() {
 	// Parse command line flags
 	var password string
+	var logFilePath string
 	flag.BoolVar(&globalDebug, "debug", false, "Enable debug output")
 	flag.BoolVar(&globalDebug, "d", false, "Enable debug output (shorthand)")
 	flag.StringVar(&password, "password", "", "Admin password for authentication")
 	flag.StringVar(&password, "p", "", "Admin password for authentication (shorthand)")
+	flag.StringVar(&logFilePath, "log", "", "Log file path for activity logging")
+	flag.StringVar(&logFilePath, "l", "", "Log file path for activity logging (shorthand)")
 	flag.Parse()
 
 	args := flag.Args()
 	if len(args) < 2 {
 		printUsage()
 		os.Exit(1)
+	}
+
+	// Set up logging if log file specified
+	if logFilePath != "" {
+		var err error
+		logFile, err = os.OpenFile(logFilePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		if err != nil {
+			log.Fatalf("Failed to open log file %s: %v", logFilePath, err)
+		}
+		defer logFile.Close()
+
+		// Create logger with timestamp
+		logger = log.New(logFile, "", log.LstdFlags)
+
+		// Log the command line immediately
+		cmdLine := strings.Join(os.Args, " ")
+		logger.Printf("Command: %s", cmdLine)
 	}
 
 	globalSwitchAddr = args[0]
@@ -51,6 +74,7 @@ func main() {
 		fmt.Printf("Debug mode enabled\n")
 		fmt.Printf("Switch: %s, Command: %s\n", globalSwitchAddr, command)
 	}
+	logMessage("Debug mode: %v, Switch: %s, Command: %s", globalDebug, globalSwitchAddr, command)
 
 	// Set up global options for all commands
 	globalOpts = &go_netgear.GlobalOptions{
@@ -89,8 +113,16 @@ func main() {
 	}
 }
 
+// logMessage logs a message to the log file if logging is enabled
+func logMessage(format string, args ...interface{}) {
+	if logger != nil {
+		logger.Printf(format, args...)
+	}
+}
+
 // ensureAuthenticated ensures we have a valid session, logging in if necessary
 func ensureAuthenticated() error {
+	logMessage("Ensuring authentication for %s", globalSwitchAddr)
 	// Check if cached token exists
 	if hasValidToken(globalSwitchAddr, globalDebug) {
 		// Validate the token with a keep-alive check
@@ -98,6 +130,7 @@ func ensureAuthenticated() error {
 			if globalDebug {
 				fmt.Printf("Using cached token\n")
 			}
+			logMessage("Using cached token for %s", globalSwitchAddr)
 			return nil
 		}
 
@@ -105,6 +138,7 @@ func ensureAuthenticated() error {
 		if globalDebug {
 			fmt.Printf("Cached token is invalid, will re-login\n")
 		}
+		logMessage("Cached token invalid, re-authenticating to %s", globalSwitchAddr)
 		removeToken(globalSwitchAddr)
 	}
 
@@ -112,32 +146,70 @@ func ensureAuthenticated() error {
 	return performLogin()
 }
 
-// performLogin executes the login command
+// performLogin executes the login command with retry logic
 func performLogin() error {
 	if globalPassword == "" {
+		logMessage("Login failed: no password available for %s", globalSwitchAddr)
 		return fmt.Errorf("no password available for authentication")
 	}
 
+	// Retry delays: 200ms, 500ms, 1000ms
+	retryDelays := []time.Duration{200 * time.Millisecond, 500 * time.Millisecond, 1000 * time.Millisecond}
+	maxAttempts := len(retryDelays) + 1 // Initial attempt + retries
+
+	var lastErr error
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		if globalDebug {
+			if attempt == 1 {
+				fmt.Printf("Logging in to %s...\n", globalSwitchAddr)
+			} else {
+				fmt.Printf("Retry attempt %d of %d for %s...\n", attempt-1, len(retryDelays), globalSwitchAddr)
+			}
+		}
+		if attempt == 1 {
+			logMessage("Logging in to %s", globalSwitchAddr)
+		} else {
+			logMessage("Retry attempt %d of %d for %s", attempt-1, len(retryDelays), globalSwitchAddr)
+		}
+
+		loginCmd := &go_netgear.LoginCommand{
+			Address:  globalSwitchAddr,
+			Password: globalPassword,
+		}
+
+		err := loginCmd.Run(globalOpts)
+		if err == nil {
+			loginAttempted = true
+			if globalDebug {
+				fmt.Printf("Login successful\n")
+			}
+			logMessage("Login successful to %s", globalSwitchAddr)
+			return nil
+		}
+
+		lastErr = err
+		if globalDebug {
+			fmt.Printf("Login attempt %d failed: %v\n", attempt, err)
+		}
+		logMessage("Login attempt %d failed for %s: %v", attempt, globalSwitchAddr, err)
+
+		// If we have more attempts remaining, wait before retrying
+		if attempt < maxAttempts {
+			delay := retryDelays[attempt-1]
+			if globalDebug {
+				fmt.Printf("Waiting %v before retry...\n", delay)
+			}
+			logMessage("Waiting %v before retry", delay)
+			time.Sleep(delay)
+		}
+	}
+
+	// All attempts failed
+	logMessage("Giving up after %d failed login attempts for %s: %v", maxAttempts, globalSwitchAddr, lastErr)
 	if globalDebug {
-		fmt.Printf("Logging in to %s...\n", globalSwitchAddr)
+		fmt.Printf("Giving up after %d failed login attempts\n", maxAttempts)
 	}
-
-	loginCmd := &go_netgear.LoginCommand{
-		Address:  globalSwitchAddr,
-		Password: globalPassword,
-	}
-
-	err := loginCmd.Run(globalOpts)
-	if err != nil {
-		return fmt.Errorf("login failed: %w", err)
-	}
-
-	loginAttempted = true
-	if globalDebug {
-		fmt.Printf("Login successful\n")
-	}
-
-	return nil
+	return fmt.Errorf("login failed after %d attempts: %w", maxAttempts, lastErr)
 }
 
 // validateToken checks if the current token is still valid by making a lightweight request
@@ -256,6 +328,7 @@ Commands:
 Options:
   --debug, -d       - Enable debug output
   --password, -p    - Admin password for authentication
+  --log, -l         - Log file path for activity logging
 
 Examples:
   %s 192.168.1.10 status
@@ -276,6 +349,7 @@ func showStatus(globalOpts *go_netgear.GlobalOptions, switchAddress string) {
 	if globalDebug {
 		fmt.Printf("Executing status command...\n")
 	}
+	logMessage("Executing status command on %s", switchAddress)
 
 	err := handleAuthError(func() error {
 		if globalDebug {
@@ -295,11 +369,14 @@ func showStatus(globalOpts *go_netgear.GlobalOptions, switchAddress string) {
 	})
 
 	if err != nil {
+		logMessage("Failed to get POE status from %s: %v", switchAddress, err)
 		log.Fatalf("Failed to get POE status: %v", err)
 	}
+	logMessage("Successfully retrieved POE status from %s", switchAddress)
 }
 
 func showSettings(globalOpts *go_netgear.GlobalOptions, switchAddress string) {
+	logMessage("Executing settings command on %s", switchAddress)
 	err := handleAuthError(func() error {
 		cmd := &go_netgear.PoeShowSettingsCommand{
 			Address: switchAddress,
@@ -308,16 +385,20 @@ func showSettings(globalOpts *go_netgear.GlobalOptions, switchAddress string) {
 	})
 
 	if err != nil {
+		logMessage("Failed to get POE settings from %s: %v", switchAddress, err)
 		log.Fatalf("Failed to get POE settings: %v", err)
 	}
+	logMessage("Successfully retrieved POE settings from %s", switchAddress)
 }
 
 func enablePorts(globalOpts *go_netgear.GlobalOptions, switchAddress string, portArgs []string) {
 	ports := parsePorts(portArgs)
 	if len(ports) == 0 {
+		logMessage("Enable ports failed: no port numbers specified")
 		log.Fatal("No port numbers specified")
 	}
 
+	logMessage("Enabling POE on %s ports %v", switchAddress, ports)
 	err := handleAuthError(func() error {
 		cmd := &go_netgear.PoeSetConfigCommand{
 			Address: switchAddress,
@@ -328,21 +409,25 @@ func enablePorts(globalOpts *go_netgear.GlobalOptions, switchAddress string, por
 	})
 
 	if err != nil {
+		logMessage("Failed to enable POE on %s ports %v: %v", switchAddress, ports, err)
 		log.Fatalf("Failed to enable POE on ports %v: %v", ports, err)
 	}
 
 	fmt.Printf("✓ Enabled POE on ports %v\n", ports)
+	logMessage("Successfully enabled POE on %s ports %v", switchAddress, ports)
 }
 
 func disablePorts(globalOpts *go_netgear.GlobalOptions, switchAddress string, portArgs []string) {
 	ports := parsePorts(portArgs)
 	if len(ports) == 0 {
+		logMessage("Disable ports failed: no port numbers specified")
 		log.Fatal("No port numbers specified")
 	}
 
 	if globalDebug {
 		fmt.Printf("Disabling POE on ports: %v\n", ports)
 	}
+	logMessage("Disabling POE on %s ports %v", switchAddress, ports)
 
 	err := handleAuthError(func() error {
 		cmd := &go_netgear.PoeSetConfigCommand{
@@ -365,18 +450,22 @@ func disablePorts(globalOpts *go_netgear.GlobalOptions, switchAddress string, po
 	})
 
 	if err != nil {
+		logMessage("Failed to disable POE on %s ports %v: %v", switchAddress, ports, err)
 		log.Fatalf("Failed to disable POE on ports %v: %v", ports, err)
 	}
 
 	fmt.Printf("✓ Disabled POE on ports %v\n", ports)
+	logMessage("Successfully disabled POE on %s ports %v", switchAddress, ports)
 }
 
 func cyclePorts(globalOpts *go_netgear.GlobalOptions, switchAddress string, portArgs []string) {
 	ports := parsePorts(portArgs)
 	if len(ports) == 0 {
+		logMessage("Cycle ports failed: no port numbers specified")
 		log.Fatal("No port numbers specified")
 	}
 
+	logMessage("Power cycling POE on %s ports %v", switchAddress, ports)
 	err := handleAuthError(func() error {
 		cmd := &go_netgear.PoeCyclePowerCommand{
 			Address: switchAddress,
@@ -386,10 +475,12 @@ func cyclePorts(globalOpts *go_netgear.GlobalOptions, switchAddress string, port
 	})
 
 	if err != nil {
+		logMessage("Failed to cycle power on %s ports %v: %v", switchAddress, ports, err)
 		log.Fatalf("Failed to cycle power on ports %v: %v", ports, err)
 	}
 
 	fmt.Printf("✓ Power cycle completed on ports %v\n", ports)
+	logMessage("Successfully cycled power on %s ports %v", switchAddress, ports)
 }
 
 func parsePorts(args []string) []int {

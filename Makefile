@@ -131,6 +131,20 @@ size: build
 		ls -lh $(BUILD_DIR)/ | grep -v "^total" | awk '{print "  " $$9 ": " $$5}'; \
 	fi
 
+## install: Install binaries to /usr/local/bin
+.PHONY: install
+install: build
+	@echo "Installing binaries to /usr/local/bin..."
+	@for example in $(EXAMPLES); do \
+		echo "Installing $$example..."; \
+		sudo cp $(BUILD_DIR)/$$example /usr/local/bin/; \
+		if [ $$? -ne 0 ]; then \
+			echo "❌ Failed to install $$example"; \
+			exit 1; \
+		fi; \
+	done
+	@echo "✅ Installation complete"
+
 ## release: Create release archive for current OS
 .PHONY: release
 release: build
